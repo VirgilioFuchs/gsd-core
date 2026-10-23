@@ -22,23 +22,12 @@
  *   `--files`). Real, already reported, already queued as its own issue
  *   (#4461, filed separately by #4460's own reporter) — fixing it here
  *   would be exactly the scope creep the reporter took care to avoid.
- * - Tier 1's fence IS parseable bash, but its REPO_ROOT-prefix containment
- *   check is confirmed non-functional on Windows CI: `git rev-parse
- *   --show-toplevel` there returns a mixed-format path (`C:/Users/...` —
- *   drive letter, forward slashes) while GNU `realpath` (also bundled with
- *   Git for Windows) returns a genuine POSIX path for the IDENTICAL
- *   location (`/c/Users/...`) — confirmed via this test's own stderr
- *   diagnostics captured on a live Windows CI run of PR #4552, after three
- *   prior guesses at the same "--files widened to all 5 files" symptom
- *   (stripping `-m`, then two rounds of Node-side realpath-expansion
- *   fixes) each failed identically because none of them was the actual
- *   cause. The two path forms can never share a string prefix, so Tier 1
- *   misclassifies every `--files` entry as "outside the repository" on
- *   every Windows run, unconditionally and deterministically — a real,
- *   structural, pre-existing Tier 1 defect, not something introduced or
- *   fixable by this test. Same out-of-scope bucket as #4461 (this file's
- *   fences not being cross-platform-robust); not this fix's concern (see
- *   cr-2 in #4460's review notes).
+ * - Tier 1's fence is parseable bash and is covered by its own describe below (#5519). Its
+ *   REPO_ROOT containment check used to misclassify every `--files` entry as "outside the
+ *   repository" on Windows Git Bash, where `git rev-parse --show-toplevel` returns a mixed path
+ *   (`C:/Users/...`) and GNU `realpath` returns an MSYS POSIX path (`/c/Users/...`); both sides are
+ *   now normalized with `cygpath -m` and compared on a path boundary. Tier 1 is still seeded here,
+ *   not sourced, so these Tier 3 cases stay independent of it.
  *
  * Seeding REVIEW_FILES directly for both tiers isolates the test to Tier
  * 3's own logic — the actual subject of #4460 — independent of either
