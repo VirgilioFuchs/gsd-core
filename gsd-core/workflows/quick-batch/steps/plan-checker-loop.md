@@ -73,7 +73,7 @@ that require a ROADMAP phase goal.
 counts as BLOCKER, fail closed; pure INFO entries are advisory only and never
 enter the revision loop):
 
-- **`## VERIFICATION PASSED`** or all-INFO: proceed to the next item.
+- **`## VERIFICATION PASSED`** or all-INFO: proceed to the next item. A `## VERIFICATION PASSED` return that nevertheless lists any BLOCKER or WARNING entry (in the YAML issues block or in prose) is handled as `## ISSUES FOUND`: the sentinel never decides alone (#5578).
 - **Any BLOCKER/WARNING:** revision loop, max 2 iterations total for this item.
 
 **Revision (iteration < 2):**
