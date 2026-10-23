@@ -140,7 +140,10 @@ if [ -n "$FILES_OVERRIDE" ]; then
     # boundary: the root itself or anything under "<root>/" — a sibling such as "<root>-other"
     # shares the prefix but is not inside.
     ABS_PATH=$(_gsd_norm_path "$(realpath -m "${file_path}" 2>/dev/null || echo "${file_path}")")
-    if [[ "$ABS_PATH" != "$REPO_ROOT" && "$ABS_PATH" != "$REPO_ROOT"/* ]]; then
+    # Fail closed on two shapes that cannot be trusted: an empty root (git failed, so nothing can be
+    # "inside" it) and a path that still holds ".." segments (a resolved path never does, so it was
+    # not resolved — no GNU realpath).
+    if [ -z "$REPO_ROOT" ] || [[ "$ABS_PATH" == */../* || "$ABS_PATH" == */.. ]] || [[ "$ABS_PATH" != "$REPO_ROOT" && "$ABS_PATH" != "$REPO_ROOT"/* ]]; then
       echo "Error: File path outside repository, skipping: ${file_path}"
       continue
     fi

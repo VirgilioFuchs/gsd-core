@@ -351,6 +351,23 @@ cygpath() {
     assert.deepEqual(r.outside, ['src/a.js']);
   }));
 
+  test('an absolute path that still holds .. segments (no GNU realpath to resolve it) is rejected, not trusted', withTmp((parent) => {
+    const repo = path.join(parent, 'repo');
+    fs.mkdirSync(repo);
+    seedFixtureRepo(repo);
+    writeAndCommit(repo, 'src/a.js', 'a\n', 'chore: init');
+    const escape = `${repo.replace(/\\/g, '/')}/../../etc/hosts`;
+    const r = runTier1(repo, [escape], 'realpath() { return 127; }');
+    assert.deepEqual(r.kept, []);
+    assert.deepEqual(r.outside, [escape], 'an unresolved ".." path is not inside the repository');
+  }));
+
+  test('an empty repository root (git failed) accepts nothing', withTmp((dir) => {
+    const r = runTier1(dir, ['/etc/hosts', 'src/a.js'], 'git() { return 128; }');
+    assert.deepEqual(r.kept, []);
+    assert.deepEqual(r.outside, ['/etc/hosts', 'src/a.js']);
+  }));
+
   test('the platform notes document the Windows path-form handling instead of a limitation', () => {
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     const notes = content.slice(content.indexOf('<platform_notes>'));
