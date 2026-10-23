@@ -327,7 +327,11 @@ cygpath() {
   test('real bash: in-repository files are kept; ../ escapes and a sibling sharing the repo-name prefix are rejected', (t) => {
     const probe = spawnSync('realpath', ['-m', '.'], { encoding: 'utf8', timeout: GIT_FIXTURE_TIMEOUT_MS });
     if (probe.error || probe.status !== 0) { t.skip('GNU realpath -m is not available (macOS without coreutils): the fail-closed test covers that shape'); return; }
-    withTmp((parent) => {
+    withTmp((rawParent) => {
+    // Windows hands out 8.3 short temp paths (C:\Users\RUNNER~1\...) that git reports in long form; an
+    // 8.3-vs-long mismatch is a separate path-form concern from the one under test, so build the fixture
+    // under the native long name.
+    const parent = fs.realpathSync.native(rawParent);
     const repo = path.join(parent, 'repo');
     fs.mkdirSync(repo);
     seedFixtureRepo(repo);
@@ -336,7 +340,9 @@ cygpath() {
     fs.writeFileSync(path.join(parent, 'repo-other', 'f.js'), 'x\n');
     fs.writeFileSync(path.join(parent, 'outside.js'), 'x\n');
     const r = runTier1(repo, ['src/a.js', '../repo-other/f.js', '../outside.js', '../../etc/passwd']);
-    assert.deepEqual(r.kept, ['src/a.js'], `only the in-repository file is reviewed:\n${r.stdout}`);
+    // Raw forms the fence compared, so a path-form regression is diagnosable from the failure alone.
+    const forms = spawnSync('bash', ['-c', 'echo "toplevel=$(git rev-parse --show-toplevel)"; echo "realpath=$(realpath -m src/a.js)"; command -v cygpath >/dev/null && echo "cygpath-root=$(cygpath -m "$(git rev-parse --show-toplevel)")"; echo "cygpath-file=$(command -v cygpath >/dev/null && cygpath -m "$(realpath -m src/a.js)")"'], { cwd: repo, encoding: 'utf8', timeout: GIT_FIXTURE_TIMEOUT_MS }).stdout;
+    assert.deepEqual(r.kept, ['src/a.js'], `only the in-repository file is reviewed:\n${r.stdout}\npath forms:\n${forms}`);
     assert.deepEqual(r.outside, ['../repo-other/f.js', '../outside.js', '../../etc/passwd']);
     })();
   });
