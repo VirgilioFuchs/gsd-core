@@ -324,9 +324,10 @@ cygpath() {
     assert.deepEqual(r.kept, []);
   }));
 
-  test('real bash: in-repository files are kept; ../ escapes and a sibling sharing the repo-name prefix are rejected', withTmp((parent) => {
+  test('real bash: in-repository files are kept; ../ escapes and a sibling sharing the repo-name prefix are rejected', (t) => {
     const probe = spawnSync('realpath', ['-m', '.'], { encoding: 'utf8', timeout: GIT_FIXTURE_TIMEOUT_MS });
-    if (probe.error || probe.status !== 0) return; // no GNU realpath here (macOS without coreutils): the fail-closed test covers that shape
+    if (probe.error || probe.status !== 0) { t.skip('GNU realpath -m is not available (macOS without coreutils): the fail-closed test covers that shape'); return; }
+    withTmp((parent) => {
     const repo = path.join(parent, 'repo');
     fs.mkdirSync(repo);
     seedFixtureRepo(repo);
@@ -337,7 +338,8 @@ cygpath() {
     const r = runTier1(repo, ['src/a.js', '../repo-other/f.js', '../outside.js', '../../etc/passwd']);
     assert.deepEqual(r.kept, ['src/a.js'], `only the in-repository file is reviewed:\n${r.stdout}`);
     assert.deepEqual(r.outside, ['../repo-other/f.js', '../outside.js', '../../etc/passwd']);
-  }));
+    })();
+  });
 
   test('without realpath the guard still fails closed (the macOS shape)', withTmp((parent) => {
     const repo = path.join(parent, 'repo');
@@ -352,6 +354,7 @@ cygpath() {
   test('the platform notes document the Windows path-form handling instead of a limitation', () => {
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     const notes = content.slice(content.indexOf('<platform_notes>'));
-    assert.match(notes, /cygpath/, 'platform_notes explains the cygpath normalization of the --files check');
+    assert.match(notes, /cygpath -m/, 'platform_notes explains the cygpath -m normalization of the --files check');
+    assert.match(notes, /C:\/Users[^\n]*\n?[^\n]*\/c\/Users/, 'and names the two path forms Git Bash reports');
   });
 });
