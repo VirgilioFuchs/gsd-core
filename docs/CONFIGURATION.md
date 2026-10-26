@@ -1859,35 +1859,22 @@ Note that the gate is on effort being configured **at all**, not on the individu
 
 **Cross-provider clamping:** `minimal` is Anthropic-unsupported — it clamps to `low` on Claude.
 
-**Codex effort is resolved per model, not per runtime (#3007).** Codex advertises a
-`supported_reasoning_levels` set on each model and validates against it, so the same universal level
-can pass cleanly on one model and clamp on another. GSD therefore renders against the model's own
-advertised set:
+**Codex effort rendering uses the catalog's per-model restrictions (#3007).** The local
+`codexModelEffort` entries and family baseline permit `low`, `medium`, `high`, and `xhigh`.
+This configured subset may be narrower than the capabilities returned by the Codex runtime.
+Unknown or legacy model IDs use the same family baseline. The API and argv emission channels
+both use this catalog restriction.
 
-| Model | Advertised levels |
-|---|---|
-| `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
-| `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `gpt-5.6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
-| any other / unknown id | `low`, `medium`, `high`, `xhigh`, `max` (family baseline) |
+Effort defaults still come from the unified policy in `config-defaults.manifest.json`:
+`light → low`, `standard → high`, `heavy → xhigh`. These defaults do not prohibit an explicit
+`medium` choice, which remains in the local catalog. Neither Codex tier defaults nor OpenAI
+provider presets embed a fixed `reasoning_effort`.
 
-Today every shipped Codex model advertises the same usable range, so the same effort resolves
-identically across `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` — `ultra` is sol's only
-differentiator, and GSD rejects it for every model regardless (see below), so no observable output
-currently differs by model. The table is per-model, not per-runtime, because Codex declares
-capability per model and the sets are free to diverge — the previous single per-runtime assumption
-is exactly what went stale and produced this change.
-
-Three consequences:
-
-- **`max` reaches Codex.** It is no longer clamped to `xhigh`. Earlier GSD releases described `max`
-  as Anthropic-only; that was accurate when written and Codex has since added it. If you set `max`
-  for a Codex agent, your generated `model_reasoning_effort` now says `max` where it previously said
-  `xhigh`.
-- **`minimal` no longer reaches Codex.** No Codex model advertises it, so it clamps up to `low` —
-  the floor every model does advertise. GSD previously emitted `minimal` verbatim, which Codex
-  rejects.
-- **`ultra` is refused outright**, and is not part of GSD's ladder. See below.
+- **`max` is not emitted for Codex.** The existing renderer rejects it because the local catalog
+  has no supported level at or above it. It is not silently replaced by `xhigh`.
+- **`minimal` clamps up to `low`** using the existing renderer.
+- **`ultra` remains refused by GSD's delegation policy**, independently of catalog contents.
+  Other runtimes and the global effort vocabulary are unchanged.
 
 **Every clamp is now visible.** `resolve-execution` reports the level you asked for alongside the
 level actually rendered, so a downgrade is legible instead of silent. These are flat keys in the
@@ -2160,7 +2147,7 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 | Runtime | `opus` | `sonnet` | `haiku` | reasoning_effort |
 |---------|--------|----------|---------|------------------|
 | `claude` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (not used) |
-| `codex` | `gpt-5.6-sol` | `gpt-5.6-terra` | `gpt-5.6-luna` | `xhigh` / `medium` / `medium` |
+| `codex` | `gpt-6-astra` | `gpt-6.1-sol` | `gpt-6-luna` | (not fixed in runtime defaults; uses unified effort policy) |
 | `qwen` | `qwen3-max-2026-01-23` | `qwen3-coder-plus` | `qwen3-coder-next` | (not used) |
 | `opencode` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (not used) |
 | `copilot` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (not used) |
@@ -2180,7 +2167,9 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 }
 ```
 
-This resolves `gsd-planner` → `gpt-5.6-sol` (xhigh), `gsd-executor` → `gpt-5.6-terra` (medium), `gsd-codebase-mapper` → `gpt-5.6-luna` (medium). Codex skills pass each resolved `model` and `reasoning_effort` to `spawn_agent` when its visible schema advertises the corresponding field; otherwise they omit the field and inherit the session/static agent configuration.
+This resolves `gsd-planner` → `gpt-6-astra`, `gsd-executor` → `gpt-6.1-sol`, and `gsd-codebase-mapper` → `gpt-6-luna`. The Codex runtime defaults contain only model IDs; effort remains controlled by GSD's unified effort policy. Codex skills pass the resolved `model` and the policy-derived `reasoning_effort` to `spawn_agent` when its visible schema advertises the corresponding field; otherwise they omit the field and inherit the session/static agent configuration. The existing `ultra` rejection and explicit per-agent pins remain unchanged.
+
+The `openai` provider preset selects among older and newer model generations according to the tier and budget configured in the catalog. It applies wherever `model_policy.provider` selects `openai`, independently of the active runtime. Both its entries and `runtimeTierDefaults.codex` contain only model IDs, without fixed reasoning effort. Effort remains owned by the unified policy in `config-defaults.manifest.json` (`light: low`, `standard: high`, `heavy: xhigh`).
 
 **Claude example** — pin a tier's generation without giving up tier-based profiles (#4192):
 

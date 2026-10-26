@@ -81,20 +81,18 @@ describe('model-catalog: exported enums/maps', () => {
     assert.equal(KNOWN_PROVIDERS.has('openai'), true);
   });
 
-  test('RUNTIMES_WITH_REASONING_EFFORT is codex-only', () => {
-    assert.deepEqual(new Set(RUNTIMES_WITH_REASONING_EFFORT), new Set(['codex']));
+  test('runtime defaults carry no fixed reasoning effort', () => {
+    assert.deepEqual(new Set(RUNTIMES_WITH_REASONING_EFFORT), new Set());
   });
 
   test('RUNTIMES_WITH_FAST_MODE is api-only', () => {
     assert.deepEqual(new Set(RUNTIMES_WITH_FAST_MODE), new Set(['api']));
   });
 
-  test('CODEX_MODEL_EFFORT has a baseline and per-model sets, sol includes ultra', () => {
-    assert.ok(CODEX_MODEL_EFFORT['_baseline'] instanceof Set);
-    assert.equal(CODEX_MODEL_EFFORT['_baseline'].has('max'), true);
-    assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-sol'].has('ultra'), true);
-    assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-terra'].has('ultra'), false);
-    assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-luna'].has('ultra'), false);
+  test('CODEX_MODEL_EFFORT restricts Codex to low/medium/high/xhigh', () => {
+    for (const levels of Object.values(CODEX_MODEL_EFFORT)) {
+      assert.deepEqual(levels, new Set(['low', 'medium', 'high', 'xhigh']));
+    }
   });
 
   test('MODEL_ALIAS_MAP maps opus/sonnet/haiku to claude model ids', () => {
@@ -178,13 +176,21 @@ describe('model-catalog: getAgentToModelMapForProfile / formatAgentToModelMapAsT
 });
 
 describe('model-catalog: renderEffortForRuntime — codex per-model', () => {
-  test("sol's 'max' passes through unclamped", () => {
+  test('current Codex defaults use the unified effort policy and reject ultra', () => {
+    for (const { model } of Object.values(RUNTIME_PROFILE_MAP.codex)) {
+      for (const effort of ['low', 'medium', 'high', 'xhigh']) {
+        assert.equal(renderEffortForRuntime('codex', effort, model).value, effort);
+      }
+      assert.equal(renderEffortForRuntime('codex', 'ultra', model).value, null);
+    }
+  });
+  test("sol's 'max' is refused without a supported level above it", () => {
     const r = renderEffortForRuntime('codex', 'max', 'gpt-5.6-sol');
-    assert.equal(r.value, 'max');
+    assert.equal(r.value, null);
     assert.equal(r.clamped, false);
-    assert.equal(r.reason, null);
-    assert.equal(r.param, 'model_reasoning_effort');
-    assert.equal(r.channel, 'api');
+    assert.ok(r.reason.length > 0);
+    assert.equal(r.param, null);
+    assert.equal(r.channel, null);
   });
 
   test("'minimal' clamps up to 'low' with clamped:true and a non-empty reason (sol/terra/luna)", () => {
@@ -207,8 +213,8 @@ describe('model-catalog: renderEffortForRuntime — codex per-model', () => {
     assert.ok(r.reason.includes('#2167'));
   });
 
-  test('low/medium/high/xhigh pass through unclamped with reason:null', () => {
-    for (const level of ['low', 'medium', 'high', 'xhigh']) {
+  test('low/high/xhigh pass through unclamped with reason:null', () => {
+    for (const level of ['low', 'high', 'xhigh']) {
       const r = renderEffortForRuntime('codex', level, 'gpt-5.6-terra');
       assert.equal(r.value, level);
       assert.equal(r.clamped, false);
@@ -218,7 +224,7 @@ describe('model-catalog: renderEffortForRuntime — codex per-model', () => {
 
   test('unknown model falls back to the family baseline', () => {
     const r = renderEffortForRuntime('codex', 'max', 'gpt-9-never-heard-of-it');
-    assert.equal(r.value, 'max');
+    assert.equal(r.value, null);
     assert.equal(r.clamped, false);
   });
 
@@ -278,15 +284,19 @@ describe('model-catalog: renderEffortArgv', () => {
   test("effortSurface gate: 'none'/undefined produce empty, 'argv' produces an argument", () => {
     assert.deepEqual(renderEffortArgv('codex', 'max', 'none'), { argv: [], value: null, host: 'codex' });
     assert.deepEqual(renderEffortArgv('codex', 'max', undefined), { argv: [], value: null, host: 'codex' });
-    const r = renderEffortArgv('codex', 'max', 'argv');
-    assert.deepEqual(r.argv, ['-c', 'model_reasoning_effort=max']);
-    assert.equal(r.value, 'max');
+    const r = renderEffortArgv('codex', 'high', 'argv');
+    assert.deepEqual(r.argv, ['-c', 'model_reasoning_effort=high']);
+    assert.equal(r.value, 'high');
   });
 
-  test("codex 'max' passes through, 'minimal' clamps to 'low'", () => {
+  test("codex rejects 'max', clamps 'minimal' to 'low' and preserves 'medium'", () => {
     const max = renderEffortArgv('codex', 'max', 'argv');
-    assert.deepEqual(max.argv, ['-c', 'model_reasoning_effort=max']);
-    assert.equal(max.value, 'max');
+    assert.deepEqual(max.argv, []);
+    assert.equal(max.value, null);
+
+    const medium = renderEffortArgv('codex', 'medium', 'argv');
+    assert.deepEqual(medium.argv, ['-c', 'model_reasoning_effort=medium']);
+    assert.equal(medium.value, 'medium');
 
     const minimal = renderEffortArgv('codex', 'minimal', 'argv');
     assert.deepEqual(minimal.argv, ['-c', 'model_reasoning_effort=low']);
@@ -451,8 +461,8 @@ describe('model-catalog: EFFORT_RENDERING / EFFORT_ARGV supported sets (#3915)',
     assert.deepStrictEqual(EFFORT_RENDERING.claude.supported, new Set(['low', 'medium', 'high', 'xhigh', 'max']));
   });
 
-  test('EFFORT_RENDERING.codex.supported is exactly low/medium/high/xhigh/max', () => {
-    assert.deepStrictEqual(EFFORT_RENDERING.codex.supported, new Set(['low', 'medium', 'high', 'xhigh', 'max']));
+  test('EFFORT_RENDERING.codex.supported is exactly low/medium/high/xhigh', () => {
+    assert.deepStrictEqual(EFFORT_RENDERING.codex.supported, new Set(['low', 'medium', 'high', 'xhigh']));
   });
 
   test("EFFORT_RENDERING.codex.clamp maps 'minimal' to 'low' and leaves other levels unchanged", () => {
@@ -468,8 +478,8 @@ describe('model-catalog: EFFORT_RENDERING / EFFORT_ARGV supported sets (#3915)',
     assert.deepStrictEqual(EFFORT_ARGV.opencode.supported, new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']));
   });
 
-  test('EFFORT_ARGV.codex.supported is exactly low/medium/high/xhigh/max', () => {
-    assert.deepStrictEqual(EFFORT_ARGV.codex.supported, new Set(['low', 'medium', 'high', 'xhigh', 'max']));
+  test('EFFORT_ARGV.codex.supported is exactly low/medium/high/xhigh', () => {
+    assert.deepStrictEqual(EFFORT_ARGV.codex.supported, new Set(['low', 'medium', 'high', 'xhigh']));
   });
 });
 

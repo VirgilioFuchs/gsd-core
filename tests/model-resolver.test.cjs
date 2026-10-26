@@ -357,10 +357,8 @@ describe('#3533 effort inherit: expressible at every layer, never a wire level',
     }
     // Concrete levels unchanged.
     assert.strictEqual(renderEffortForRuntime('claude', 'minimal').value, 'low');
-    // #3007: corrected — Codex DOES advertise 'max' (per-model table), so
-    // ADR-443's "Codex has no max" premise went stale and this pinned the
-    // defect (clamping 'max' down to 'xhigh') instead of the fix.
-    assert.strictEqual(renderEffortForRuntime('codex', 'max').value, 'max');
+    // The local catalog restricts Codex to levels below max.
+    assert.strictEqual(renderEffortForRuntime('codex', 'max').value, null);
     assert.strictEqual(renderEffortForRuntime('claude', 'xhigh').value, 'xhigh');
   });
 });
@@ -1674,10 +1672,16 @@ function writeConfig(dir, config) {
 describe('#443 integration (a): cross-provider validity invariant', () => {
   // For every universal effort × every provider runtime, the rendered value
   // must be a member of that provider's real API enum.
-  test('all VALID_EFFORTS render within provider enums for claude and codex', () => {
+  test('all VALID_EFFORTS render within provider enums or are explicitly refused', () => {
     for (const universalEffort of VALID_EFFORTS) {
       for (const [runtime, providerEnum] of Object.entries(PROVIDER_EFFORT_ENUMS)) {
         const rendered = renderEffortForRuntime(runtime, universalEffort);
+        if (runtime === 'codex' && universalEffort === 'max') {
+          assert.strictEqual(rendered.value, null);
+          assert.strictEqual(rendered.param, null);
+          assert.ok(rendered.reason);
+          continue;
+        }
         assert.ok(
           providerEnum.has(rendered.value),
           `render('${runtime}', '${universalEffort}').value = '${rendered.value}' is NOT in the ` +
@@ -1687,11 +1691,8 @@ describe('#443 integration (a): cross-provider validity invariant', () => {
     }
   });
 
-  // Documented clamps must hold exactly
-  // #3007: corrected — Codex gained 'max' (declared per-model via
-  // supported_reasoning_levels); 'max' is no longer Anthropic-only.
-  test("render('codex','max').value === 'max' (Codex now advertises max)", () => {
-    assert.strictEqual(renderEffortForRuntime('codex', 'max').value, 'max');
+  test("render('codex','max').value === null under the local catalog restriction", () => {
+    assert.strictEqual(renderEffortForRuntime('codex', 'max').value, null);
   });
 
   test("render('claude','minimal').value === 'low' (minimal is Codex-only)", () => {
@@ -1731,11 +1732,11 @@ describe('#443 integration (b): param/channel contract', () => {
     }
   });
 
-  test("codex: param is always 'model_reasoning_effort'", () => {
+  test("codex: param is 'model_reasoning_effort' only for emitted levels", () => {
     for (const effort of VALID_EFFORTS) {
       const r = renderEffortForRuntime('codex', effort);
-      assert.strictEqual(r.param, 'model_reasoning_effort',
-        `codex param must be 'model_reasoning_effort' for effort '${effort}'`);
+      assert.strictEqual(r.param, effort === 'max' ? null : 'model_reasoning_effort',
+        `codex param for effort '${effort}'`);
     }
   });
 
@@ -1745,9 +1746,9 @@ describe('#443 integration (b): param/channel contract', () => {
     }
   });
 
-  test('codex channel is stable: api', () => {
+  test('codex channel is api for emitted levels and absent for max', () => {
     for (const effort of VALID_EFFORTS) {
-      assert.strictEqual(renderEffortForRuntime('codex', effort).channel, 'api');
+      assert.strictEqual(renderEffortForRuntime('codex', effort).channel, effort === 'max' ? null : 'api');
     }
   });
 
@@ -2671,12 +2672,10 @@ describe('#443 resolveEffortForTier escalation', () => {
 // ─── Rendering / clamping ──────────────────────────────────────────────────────
 
 describe('#443 renderEffortForRuntime', () => {
-  // #3007: corrected — Codex gained 'max' (per-model supported_reasoning_levels);
-  // it no longer clamps to 'xhigh'.
-  test('codex: "max" passes through as "max"', () => {
+  test('codex: "max" is refused without a wire param', () => {
     const r = renderEffortForRuntime('codex', 'max');
-    assert.strictEqual(r.value, 'max');
-    assert.strictEqual(r.param, 'model_reasoning_effort');
+    assert.strictEqual(r.value, null);
+    assert.strictEqual(r.param, null);
   });
 
   test('codex: common levels passthrough', () => {
@@ -2772,11 +2771,9 @@ describe('#443 resolve-execution CLI command', () => {
     assert.strictEqual(output.fast_mode_supported, false);
   });
 
-  // #3007: Codex gained 'max' (per-model supported_reasoning_levels), so 'max' now
-  // renders through unchanged instead of clamping to 'xhigh'. agent_overrides is used
-  // here (not effort.default) because it outranks the routing-tier default, which is
-  // what actually lets 'max' reach the renderer end-to-end.
-  test('codex runtime -> max survives to the wire via agent_overrides, fast_mode_supported=false', () => {
+  // Agent overrides still resolve max universally; the Codex catalog restriction
+  // prevents that configured request from reaching the wire.
+  test('codex runtime -> max via agent_overrides is refused, fast_mode_supported=false', () => {
     writeConfig(tmpDir, {
       runtime: 'codex',
       effort: { default: 'max', agent_overrides: { 'gsd-planner': 'max' } },
@@ -2784,9 +2781,9 @@ describe('#443 resolve-execution CLI command', () => {
     const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.effort_param, 'model_reasoning_effort');
+    assert.strictEqual(output.effort_param, null);
     assert.strictEqual(output.effort, 'max');
-    assert.strictEqual(output.effort_rendered, 'max');
+    assert.strictEqual(output.effort_rendered, null);
     assert.strictEqual(output.effort_requested, 'max');
     assert.strictEqual(output.effort_clamped, false);
     // fast_mode_supported: codex does not support fast mode via subagent
@@ -3362,6 +3359,20 @@ describe('#49 resolveModelPolicy: null/absent policy returns null', () => {
 });
 
 describe('#49 resolveModelPolicy Sub-path B: provider presets', () => {
+  test('OpenAI resolves the configured budget matrix without embedding reasoning effort', () => {
+    const { catalog } = require('../gsd-core/bin/lib/model-catalog.cjs');
+    const expected = {
+      opus: { low: 'gpt-5.6-sol', medium: 'gpt-6-astra', high: 'gpt-6-astra' },
+      sonnet: { low: 'gpt-5.6-luna', medium: 'gpt-6-sol', high: 'gpt-6-astra' },
+      haiku: { low: 'gpt-5.6-luna', medium: 'gpt-6-luna', high: 'gpt-6.1-sol' },
+    };
+    for (const [tier, budgets] of Object.entries(expected)) {
+      for (const [budget, model] of Object.entries(budgets)) {
+        assert.strictEqual(resolveModelPolicy({ provider: 'openai', budget }, tier), model);
+        assert.deepStrictEqual(catalog.providerPresets.openai[tier][budget], { model });
+      }
+    }
+  });
   test('known provider "anthropic" + tier "opus" + budget "high" returns correct model ID', () => {
     // The anthropic preset catalog must contain an entry for opus+high.
     // The returned model ID is the high-budget anthropic opus model.
@@ -4511,13 +4522,13 @@ describe('#2229 cmdResolveModel CLI — tier key, additive-output guard, unknown
   });
 
   test('runtime=codex + model_profile=budget -> tier "haiku" even though the resolved model id ' +
-    '("gpt-5.6-luna") contains no "haiku" substring', () => {
+    '("gpt-6-luna") contains no "haiku" substring', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'budget' });
     const result = runGsdTools('resolve-model gsd-phase-researcher', tmpDir);
     assert.ok(result.success, `resolve-model failed: ${result.error}`);
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.tier, 'haiku');
-    assert.strictEqual(parsed.model, 'gpt-5.6-luna');
+    assert.strictEqual(parsed.model, 'gpt-6-luna');
   });
 
   test('unknown agent -> tier "unknown", unknown_agent:true still present', () => {
@@ -4785,7 +4796,7 @@ describe('#2297: global-defaults resolve_model_ids:"omit" is scoped to the activ
     // counts as an opt-in — the shared "omit" stays a Claude protection, not a
     // codex directive. Supersedes the #2297 acceptance-#4 reading for
     // detected runtimes.
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), 'gpt-5.6-terra');
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), 'gpt-6.1-sol');
   });
 
   // #2297 correctness-review BLOCKER: resolveActiveRuntime() must canonicalize
@@ -5009,7 +5020,7 @@ describe('#2297: install-marker precedence rung (GSD_RUNTIME and config.runtime 
     _setInstallRuntimeMarkerForTests('codex');
 
     // #4717 (decision a): the marker-filled runtime counts as opt-in.
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), 'gpt-5.6-terra');
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), 'gpt-6.1-sol');
   });
 
   test('marker="claude": ignores the poisoned global omit -> "sonnet"', () => {
@@ -5222,10 +5233,10 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('opus tier -> gpt-5.6-sol model; heavy-tier agent -> xhigh effort on codex', () => {
+  test('opus tier -> gpt-6-astra model; heavy-tier agent -> xhigh effort on codex', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'quality' });
-    // gsd-planner quality -> opus -> gpt-5.6-sol (model unchanged)
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5.6-sol');
+    // gsd-planner quality -> opus -> gpt-6-astra (model unchanged)
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-6-astra');
     // gsd-planner is heavy routing tier → effort 'xhigh' → rendered model_reasoning_effort
     const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
     const rendered = renderEffortForRuntime('codex', eff);
@@ -5233,9 +5244,9 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
     assert.strictEqual(rendered.value, 'xhigh');
   });
 
-  test('sonnet tier -> gpt-5.6-terra model; heavy-tier agent -> xhigh effort on codex', () => {
+  test('sonnet tier -> gpt-6.1-sol model; heavy-tier agent -> xhigh effort on codex', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'balanced' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-5.6-terra');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-6.1-sol');
     // gsd-roadmapper is heavy routing tier → effort 'xhigh' (not catalog medium)
     const eff = resolveEffortInternal(tmpDir, 'gsd-roadmapper');
     const rendered = renderEffortForRuntime('codex', eff);
@@ -5243,9 +5254,9 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
     assert.strictEqual(rendered.value, 'xhigh');
   });
 
-  test('haiku tier -> gpt-5.6-luna model; light-tier agent -> low effort on codex', () => {
+  test('haiku tier -> gpt-6-luna model; light-tier agent -> low effort on codex', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'budget' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-5.6-luna');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-6-luna');
     // gsd-codebase-mapper is light routing tier → effort 'low' (not catalog medium)
     const eff = resolveEffortInternal(tmpDir, 'gsd-codebase-mapper');
     const rendered = renderEffortForRuntime('codex', eff);
@@ -5255,10 +5266,10 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
 
   test('adaptive profile resolves on Codex (no #1713/#1806 regression)', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'adaptive' });
-    // gsd-planner adaptive -> opus -> gpt-5.6-sol
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5.6-sol');
-    // gsd-codebase-mapper adaptive -> haiku -> gpt-5.6-luna
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-5.6-luna');
+    // gsd-planner adaptive -> opus -> gpt-6-astra
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-6-astra');
+    // gsd-codebase-mapper adaptive -> haiku -> gpt-6-luna
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-6-luna');
   });
 
   test('inherit profile still returns "inherit" on Codex; effort still resolves universally', () => {
@@ -5278,7 +5289,7 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
       model_profile: 'quality',
       resolve_model_ids: 'omit',
     });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5.6-sol');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-6-astra');
   });
 });
 
@@ -5307,8 +5318,8 @@ describe('issue #2517: precedence chain', () => {
     });
     // gsd-planner quality -> opus -> overridden to gpt-5-pro
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5-pro');
-    // gsd-codebase-mapper quality -> sonnet -> gpt-5.6-terra
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-5.6-terra');
+    // gsd-codebase-mapper quality -> sonnet -> gpt-6.1-sol
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-6.1-sol');
   });
 
   test('partial profile_overrides — only opus overridden, sonnet uses default', () => {
@@ -5322,7 +5333,7 @@ describe('issue #2517: precedence chain', () => {
     // gsd-planner balanced -> opus -> overridden to gpt-5-pro
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5-pro');
     // gsd-roadmapper balanced -> sonnet -> spec default
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-5.6-terra');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-6.1-sol');
   });
 
   test('per-agent override beats profile override beats default', () => {
@@ -5367,7 +5378,7 @@ describe('issue #2517: field-merge of overrides with built-in defaults (finding 
       model_profile: 'quality',
       model_profile_overrides: { codex: { opus: { reasoning_effort: 'low' } } },
     });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5.6-sol');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-6-astra');
     const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
     const rendered = renderEffortForRuntime('codex', eff);
     assert.strictEqual(rendered.param, 'model_reasoning_effort');
@@ -5397,7 +5408,7 @@ describe('issue #2517: field-merge of overrides with built-in defaults (finding 
       tier: 'opus',
       overrides: { codex: { opus: 'gpt-5-pro' } },
     });
-    assert.deepStrictEqual(entry, { model: 'gpt-5-pro', reasoning_effort: 'xhigh' });
+    assert.deepStrictEqual(entry, { model: 'gpt-5-pro' });
   });
 
   test('resolveTierEntry helper: partial-object merge keeps built-in model', () => {
@@ -5406,7 +5417,7 @@ describe('issue #2517: field-merge of overrides with built-in defaults (finding 
       tier: 'opus',
       overrides: { codex: { opus: { reasoning_effort: 'low' } } },
     });
-    assert.deepStrictEqual(entry, { model: 'gpt-5.6-sol', reasoning_effort: 'low' });
+    assert.deepStrictEqual(entry, { model: 'gpt-6-astra', reasoning_effort: 'low' });
   });
 });
 
@@ -5474,7 +5485,7 @@ describe('issue #2517: unknown runtime + safe fallback', () => {
   test('runtime:"codex" but missing model_profile_overrides[codex] uses spec defaults', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'quality' });
     // No model_profile_overrides at all — built-in Codex defaults take over
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5.6-sol');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-6-astra');
   });
 });
 
@@ -5599,7 +5610,7 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
     assert.ok(resolver, 'expected a resolver from per-project config');
     assert.strictEqual(resolver.runtime, 'codex');
     const entry = resolver.resolve('gsd-planner');
-    assert.deepStrictEqual(entry, { model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' });
+    assert.deepStrictEqual(entry, { model: 'gpt-6-astra' });
   });
 
   test('per-project config wins over global ~/.gsd/defaults.json', () => {
@@ -5612,7 +5623,7 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
     const resolver = readGsdRuntimeProfileResolver(tmpDir);
     assert.strictEqual(resolver.runtime, 'codex');
     const entry = resolver.resolve('gsd-planner');
-    assert.strictEqual(entry.model, 'gpt-5.6-sol');
+    assert.strictEqual(entry.model, 'gpt-6-astra');
   });
 
   test('generated Codex TOML omits model = and model_reasoning_effort = lines when only the resolver would have supplied them (#3241)', () => {
@@ -5757,7 +5768,7 @@ describe('issue #2517: RUNTIME_PROFILE_MAP single source of truth (finding #16)'
     // entries through `resolveTierEntry`, so any future drift between the two
     // files would surface as a test failure here rather than a silent bug.
     const codexOpus = RUNTIME_PROFILE_MAP.codex?.opus;
-    assert.deepStrictEqual(codexOpus, { model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' });
+    assert.deepStrictEqual(codexOpus, { model: 'gpt-6-astra' });
     const claudeOpus = RUNTIME_PROFILE_MAP.claude?.opus;
     assert.deepStrictEqual(claudeOpus, { model: 'claude-opus-4-8' });
   });
@@ -6001,35 +6012,32 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
 
 // ─── #3007: Codex effort capability is per-model ─────────────────────────────
 //
-// Ground truth (Codex's models.json): gpt-5.6-sol advertises
-// low/medium/high/xhigh/max/ultra; gpt-5.6-luna and gpt-5.6-terra advertise
-// low/medium/high/xhigh/max (no ultra); no Codex model advertises 'minimal'.
-// An unknown/omitted model id falls back to the family baseline
-// (low/medium/high/xhigh/max).
+// The local Codex catalog restricts rendering to low/medium/high/xhigh, independently
+// of the broader runtime capabilities. Unknown/omitted IDs use the same baseline.
 
 const CODEX_MODEL_EFFORT_SETS = {
-  'gpt-5.6-sol': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
-  'gpt-5.6-luna': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
-  'gpt-5.6-terra': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+  'gpt-6-astra': new Set(['low', 'medium', 'high', 'xhigh']),
+  'gpt-6.1-sol': new Set(['low', 'medium', 'high', 'xhigh']),
+  'gpt-6-luna': new Set(['low', 'medium', 'high', 'xhigh']),
 };
-const CODEX_FAMILY_BASELINE = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const CODEX_FAMILY_BASELINE = new Set(['low', 'medium', 'high', 'xhigh']);
 function advertisedCodexEfforts(model) {
   return CODEX_MODEL_EFFORT_SETS[model] || CODEX_FAMILY_BASELINE;
 }
 
 describe('#3007 — Codex effort capability is per-model, and every clamp is visible', () => {
-  test('max survives for a model that advertises it', () => {
+  test('max is rejected by the local Codex catalog restriction', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max', 'gpt-5.6-sol');
-    assert.strictEqual(r.value, 'max');
+    assert.strictEqual(r.value, null);
     assert.strictEqual(r.clamped, false);
-    assert.strictEqual(r.reason, null);
+    assert.match(r.reason, /no advertised level/);
   });
 
-  test('max survives on luna, not only sol', () => {
+  test('max is rejected on luna too', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max', 'gpt-5.6-luna');
-    assert.strictEqual(r.value, 'max');
+    assert.strictEqual(r.value, null);
   });
 
   test('a level below the ceiling is not reported as clamped', () => {
@@ -6064,7 +6072,7 @@ describe('#3007 — Codex effort capability is per-model, and every clamp is vis
   test('an unknown model id gets the family baseline, not a clamp', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max', 'gpt-9.9-unreleased');
-    assert.strictEqual(r.value, 'max');
+    assert.strictEqual(r.value, null);
     assert.strictEqual(r.clamped, false);
   });
 
@@ -6078,7 +6086,7 @@ describe('#3007 — Codex effort capability is per-model, and every clamp is vis
   test('the model-less form resolves against the family baseline', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max');
-    assert.strictEqual(r.value, 'max');
+    assert.strictEqual(r.value, null);
   });
 
   test('the model-less form still floors at low', () => {
@@ -6089,7 +6097,7 @@ describe('#3007 — Codex effort capability is per-model, and every clamp is vis
 
   test('the two-argument signature keeps working for every level', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
-    const UNCHANGED = new Set(['low', 'medium', 'high', 'xhigh']);
+    const UNCHANGED = new Set(['low', 'high', 'xhigh']);
     for (const level of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
       let r;
       assert.doesNotThrow(() => { r = renderEffortForRuntime('codex', level); });
@@ -6148,14 +6156,14 @@ describe('#3007 — Codex effort capability is per-model, and every clamp is vis
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     let r;
     assert.doesNotThrow(() => { r = renderEffortForRuntime('codex', 'max', 'opus'); });
-    assert.strictEqual(r.value, 'max');
+    assert.strictEqual(r.value, null);
   });
 
   test('an anthropic-flavored id is not an effort-capability error', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     let r;
     assert.doesNotThrow(() => { r = renderEffortForRuntime('codex', 'max', 'claude-opus-4-8'); });
-    assert.strictEqual(r.value, 'max');
+    assert.strictEqual(r.value, null);
   });
 
   test('an empty model argument behaves exactly like omitting it', () => {
@@ -6305,7 +6313,7 @@ describe('#3007 PROPERTY: renderEffortForRuntime never renders a level the model
         const allowed = advertisedCodexEfforts(model);
         const r = renderEffortForRuntime('codex', level, model);
         if (r.value === null) {
-          assert.strictEqual(level, 'ultra', `only ultra may be rejected: model=${model} level=${level}`);
+          assert.ok(['max', 'ultra'].includes(level), `unexpected rejection: model=${model} level=${level}`);
           continue;
         }
         assert.ok(allowed.has(r.value), `rendered value not in model's advertised set: model=${model} level=${level} value=${r.value}`);
@@ -6328,13 +6336,9 @@ describe('#3007 PROPERTY: renderEffortForRuntime never renders a level the model
         const allowed = advertisedCodexEfforts(model);
         const r = renderEffortForRuntime('codex', level, model);
         if (r.value === null) {
-          // Rejection is a POLICY outcome, not a capability one, so it is not
-          // predicted by the advertised set. `ultra` is refused even on sol,
-          // which does advertise it: GSD is deliberately stricter than Codex
-          // because ultra turns on automatic task delegation (#2167).
-          // Reserving null for exactly `ultra` is what keeps that a decision
-          // rather than a side effect — any OTHER null is a bug.
-          assert.strictEqual(level, 'ultra', `only ultra may be rejected: model=${model} level=${level}`);
+          // Ultra is refused by the existing delegation policy; max has no
+          // supported level above it in the restricted catalog.
+          assert.ok(['max', 'ultra'].includes(level), `unexpected rejection: model=${model} level=${level}`);
           return;
         }
         assert.ok(allowed.has(r.value), `rendered value not in model's advertised set: model=${model} level=${level} value=${r.value}`);
@@ -6862,12 +6866,12 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
     // below still fail safe to "" for garbage runtime values.
     test('a detected codex runtime resolves its tier map; the global omit no longer wins (#4717 decision a)', () => {
       dir = project({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DR });
-      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-5.6-sol');
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6-astra');
     });
 
     test('the init payload a real spawn reads resolves the tier map too (#4717 decision a)', () => {
       dir = project({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DR });
-      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-5.6-sol');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6-astra');
     });
 
     test('the runtime tier map (step 3) outranks the tier table', () => {
@@ -6986,7 +6990,7 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
       // The concrete codex tier model, not merely "not empty" — `notStrictEqual('')`
       // would also pass on `opus`, i.e. on the omit gate being skipped for the
       // wrong reason.
-      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'gpt-5.6-terra');
+      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'gpt-6.1-sol');
     });
 
     // The omit lives in the SHARED ~/.gsd/defaults.json, not the project config —
@@ -7000,12 +7004,12 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
       // reading: the fill materializes the detected runtime into config.runtime
       // and a recognised non-Claude runtime there opts into its own tier map.
       dir = project(null, { resolve_model_ids: 'omit' });
-      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-5.6-terra');
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6.1-sol');
     });
 
     test('#4717 (decision a): a project-explicit omit also yields to a detected runtime\'s tier map', () => {
       dir = project({ resolve_model_ids: 'omit' });
-      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-5.6-terra');
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6.1-sol');
     });
 
     // The opt-in signal is CANONICALIZED. An earlier cut of this fix compared the

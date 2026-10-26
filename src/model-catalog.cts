@@ -151,7 +151,8 @@ export const PROVIDER_PRESETS: Record<string, Record<string, Record<string, Tier
 // rejects an unsupported level at request time, so GSD must be conservative
 // about what it sends: read the ceiling as DATA from the catalog (never
 // branch on model id in code) and fall back to the family baseline for any
-// model the catalog doesn't know about.
+// model the catalog doesn't know about. The configured sets may deliberately
+// restrict the runtime's broader capabilities without setting effort defaults.
 // (b) A malformed catalog entry (e.g. a non-array value like `"gpt-x": 5`) must
 // degrade to "ignore that entry", never throw — model-catalog.cjs is required
 // across the whole CLI, so one bad JSON value must not kill every command.
@@ -170,7 +171,7 @@ export const CODEX_MODEL_EFFORT: Record<string, Set<string>> = Object.fromEntrie
 const CODEX_EFFORT_BASELINE: Set<string> =
   CODEX_MODEL_EFFORT['_baseline'] && CODEX_MODEL_EFFORT['_baseline'].size > 0
     ? CODEX_MODEL_EFFORT['_baseline']
-    : new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+    : new Set(['low', 'medium', 'high', 'xhigh']);
 
 function advertisedCodexEffort(model: string | null | undefined): Set<string> {
   if (typeof model !== 'string' || model.length === 0) return CODEX_EFFORT_BASELINE;
@@ -269,18 +270,14 @@ export const EFFORT_RENDERING: Record<string, EffortSpec> = {
     },
   },
   codex: {
-    // #3007: 'max' and 'minimal' are stale here — Codex's per-model table
-    // (CODEX_MODEL_EFFORT above) is now the source of truth for what a given
-    // model actually advertises, and every model in the family baseline DOES
-    // advertise 'max' (no model advertises 'minimal'). This runtime-level
-    // spec is kept in sync with the family baseline so the two tables can
-    // never disagree; renderEffortForRuntime layers the per-model ceiling
-    // (and the 'ultra' policy rejection) on top of it.
+    // Catalog restrictions may be narrower than the runtime's capabilities.
+    // Keep both emission channels on the same catalog baseline; the universal
+    // effort vocabulary and unified routing-tier defaults remain independent.
     // KEEP IN SYNC with EFFORT_ARGV.codex below — same family baseline, two
     // channels (install-time vs invocation-time); they must never diverge.
     param: 'model_reasoning_effort',
     channel: 'api',
-    supported: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+    supported: new Set(CODEX_EFFORT_BASELINE),
     clamp(level: string): string {
       if (level === 'minimal') return 'low';
       return level;
@@ -336,14 +333,12 @@ export const EFFORT_ARGV: Record<string, EffortArgvSpec> = {
   },
   // First-party Codex docs: `model_reasoning_effort` is a config-only key with no
   // dedicated flag, so the generic `-c key=value` override is the only argv route.
-  // #3007: KEEP IN SYNC with EFFORT_RENDERING.codex above — this table must match
-  // the family baseline exactly (no 'minimal', 'max' passes through unclamped),
-  // otherwise the argv channel and the install-time channel disagree about the
-  // same runtime's capability.
+  // Use the same catalog restriction and existing clamp as the API channel.
+  // A refused level is filtered out by `supported` in clampEffortForHost.
   codex: {
     render: (level: string): string[] => ['-c', `model_reasoning_effort=${level}`],
-    supported: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
-    clamp: (level: string): string => (level === 'minimal' ? 'low' : level),
+    supported: new Set(CODEX_EFFORT_BASELINE),
+    clamp: (level: string): string => renderEffortForRuntime('codex', level).value ?? '',
   },
   // Verified against `pi --help` (pi 1.3.0, #5557): `--thinking <level>` — "Set
   // thinking level: off, minimal, low, medium, high, xhigh, max". `off` is a
@@ -468,11 +463,8 @@ export function renderEffortForRuntime(runtime: string, universalEffort: string,
       // handling for input the ladder doesn't recognize.
       return { value: spec.clamp(universalEffort), param: spec.param, channel: spec.channel, requested: universalEffort, clamped: false, reason: null };
     }
-    // Every model's advertised set is a contiguous run up to 'max' (or 'ultra'
-    // for sol, already handled above), so the only unsupported level in
-    // practice is 'minimal' — below every model's floor. Walk UP the ladder
-    // to the nearest level the model actually advertises (its floor): there
-    // is nothing below 'minimal' to fall back to.
+    // Walk UP to the nearest level permitted by the catalog. Restricted sets
+    // may omit levels; requests above their ceiling are rejected below.
     // Walking UP is safe today only because every advertised set floors at
     // 'low' — a future model whose floor is, say, 'high' would silently turn
     // a requested 'low' into 'high': MORE reasoning and MORE cost than asked
