@@ -2185,6 +2185,8 @@ The `openai` provider preset selects among older and newer model generations acc
 
 On the Claude runtime, tier resolution stays on Claude Code's adaptive tier aliases (`opus` / `sonnet` / `haiku`) unless you override a tier. An override value that names the current tier default collapses back to its alias (the same model in the always-accepted form); any other value — a pinned older generation such as `claude-opus-4-7`, a bare alias repointing the tier, or a non-Anthropic model id — is resolved verbatim, so `resolve-model` reports exactly what the profile pins. Setting `runtime: "claude"` alone (no overrides) changes nothing: aliases resolve exactly as they do with the key absent. `resolve_model_ids: true` remains the global switch for materializing full IDs on every agent.
 
+GPT-6.1 Terra (`gpt-6.1-terra`) can also be selected through a Codex tier override. For example, set `model_profile_overrides.codex.opus` to `"gpt-6.1-terra"`; this changes only that configured tier. The catalog permits `low`, `medium`, `high`, and `xhigh` for Terra under the same Codex effort policy described above. Actual availability depends on the Codex runtime and account.
+
 **Per-runtime overrides** — replace one or more tier defaults:
 
 ```json

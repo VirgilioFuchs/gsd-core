@@ -6018,6 +6018,7 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
 const CODEX_MODEL_EFFORT_SETS = {
   'gpt-6-astra': new Set(['low', 'medium', 'high', 'xhigh']),
   'gpt-6.1-sol': new Set(['low', 'medium', 'high', 'xhigh']),
+  'gpt-6.1-terra': new Set(['low', 'medium', 'high', 'xhigh']),
   'gpt-6-luna': new Set(['low', 'medium', 'high', 'xhigh']),
 };
 const CODEX_FAMILY_BASELINE = new Set(['low', 'medium', 'high', 'xhigh']);
@@ -6026,6 +6027,21 @@ function advertisedCodexEfforts(model) {
 }
 
 describe('#3007 — Codex effort capability is per-model, and every clamp is visible', () => {
+  test('GPT-6.1 Terra is registered and respects the existing Codex effort policy', () => {
+    const { CODEX_MODEL_EFFORT, renderEffortForRuntime, renderEffortArgv } = require('../gsd-core/bin/lib/model-catalog.cjs');
+    assert.ok(Object.hasOwn(CODEX_MODEL_EFFORT, 'gpt-6.1-terra'));
+    assert.deepStrictEqual(CODEX_MODEL_EFFORT['gpt-6.1-terra'], CODEX_MODEL_EFFORT_SETS['gpt-6.1-terra']);
+    for (const level of ['low', 'medium', 'high', 'xhigh']) {
+      assert.strictEqual(renderEffortForRuntime('codex', level, 'gpt-6.1-terra').value, level);
+      assert.strictEqual(renderEffortArgv('codex', level, 'argv').value, level);
+    }
+    assert.strictEqual(renderEffortForRuntime('codex', 'minimal', 'gpt-6.1-terra').value, 'low');
+    for (const level of ['max', 'ultra']) {
+      assert.strictEqual(renderEffortForRuntime('codex', level, 'gpt-6.1-terra').value, null);
+      assert.strictEqual(renderEffortArgv('codex', level, 'argv').value, null);
+    }
+  });
+
   test('max is rejected by the local Codex catalog restriction', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max', 'gpt-5.6-sol');
@@ -6306,7 +6322,7 @@ describe('#3007 PROPERTY: renderEffortForRuntime never renders a level the model
     // repo requires a property test for a closed-vocabulary contract, and the
     // property still adds shrinking value on failure.
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
-    const MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-9.9-unreleased-model'];
+    const MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-9.9-unreleased-model'];
     const LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
     for (const model of MODELS) {
       for (const level of LADDER) {
@@ -6329,7 +6345,7 @@ describe('#3007 PROPERTY: renderEffortForRuntime never renders a level the model
   test('for every (model, level) pair, the outcome is pass-through, clamp, or reject', () => {
     const fc = require('./helpers/fast-check-setup.cjs');
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
-    const MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-9.9-unreleased-model'];
+    const MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-9.9-unreleased-model'];
     const LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
     fc.assert(
       fc.property(fc.constantFrom(...MODELS), fc.constantFrom(...LADDER), (model, level) => {
@@ -6881,6 +6897,15 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
         model_profile_overrides: { codex: { opus: 'MPO-CODEX-OPUS' } },
       });
       assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'MPO-CODEX-OPUS');
+    });
+
+    test('GPT-6.1 Terra resolves through a Codex tier override and an agent pin still wins', () => {
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-terra' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6.1-terra');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6.1-terra');
+      cleanup(dir);
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-terra' } }, model_overrides: { 'gsd-executor': 'PINNED' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'PINNED');
     });
 
     test('model_overrides still wins over everything', () => {
