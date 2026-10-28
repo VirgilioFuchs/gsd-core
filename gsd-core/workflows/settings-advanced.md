@@ -365,12 +365,14 @@ Read `runtime` from the config (or treat as `"claude"` if absent). Look up the b
 tier map from the table below. For each tier, also read the current override from
 `model_profile_overrides.<runtime>.<tier>` if present.
 
+Codex also accepts explicit model overrides for `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna` when available in the runtime. These optional choices do not replace the GPT-5.6 tier defaults or OpenAI provider presets. See the optional GPT-6 model example in docs/CONFIGURATION.md.
+
 Built-in tier defaults by runtime:
 
 | Runtime    | `opus`                        | `sonnet`                        | `haiku`                       |
 |------------|-------------------------------|---------------------------------|-------------------------------|
 | `claude`   | `claude-opus-4-8`             | `claude-sonnet-5`             | `claude-haiku-4-5`            |
-| `codex`    | `gpt-6-astra`                 | `gpt-6.1-sol`                   | `gpt-6-luna`                  |
+| `codex`    | `gpt-5.6-sol`                 | `gpt-5.6-terra`                 | `gpt-5.6-luna`                |
 | `qwen`     | `qwen3-max-2026-01-23`        | `qwen3-coder-plus`              | `qwen3-coder-next`            |
 | `opencode` | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
 | `copilot`  | `claude-opus-4-8`             | `claude-sonnet-5`             | `claude-haiku-4-5`            |
@@ -650,7 +652,7 @@ AskUserQuestion([
     options: [
       { label: "anthropic", description: "claude-opus-4-8 / claude-sonnet-5 / claude-haiku-4-5 (Anthropic / Claude)" },
       { label: "anthropic-fable", description: "claude-fable-5 / claude-sonnet-5 / claude-haiku-4-5 (Anthropic / Claude Fable opt-in)" },
-      { label: "openai", description: "gpt-6-astra / gpt-6.1-sol / gpt-6-luna (OpenAI / Codex)" },
+      { label: "openai", description: "gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna (OpenAI / Codex)" },
       { label: "Other known provider", description: "Type google or qwen; both still use the canonical tier mapping." }
     ]
   }
@@ -685,9 +687,9 @@ Canonical tier mappings by provider and budget:
 | anthropic-fable | high   | claude-fable-5             | claude-fable-5             | claude-sonnet-5          |
 | anthropic-fable | medium | claude-opus-4-8            | claude-sonnet-5          | claude-haiku-4-5           |
 | anthropic-fable | low    | claude-haiku-4-5           | claude-haiku-4-5           | claude-haiku-4-5           |
-| openai    | high   | gpt-6-astra                | gpt-6-astra                | gpt-6.1-sol                |
-| openai    | medium | gpt-6-astra                | gpt-6-sol                  | gpt-6-luna                 |
-| openai    | low    | gpt-5.6-sol                | gpt-5.6-luna               | gpt-5.6-luna               |
+| openai    | high   | gpt-5.6-sol                | gpt-5.6-sol                | gpt-5.6-sol                |
+| openai    | medium | gpt-5.6-sol                | gpt-5.6-terra              | gpt-5.6-luna               |
+| openai    | low    | gpt-5.6-luna               | gpt-5.6-luna               | gpt-5.6-luna               |
 | google    | high   | gemini-3.1-pro-preview     | gemini-3.1-pro-preview     | gemini-3.1-pro-preview     |
 | google    | medium | gemini-3.1-pro-preview     | gemini-3-flash             | gemini-2.5-flash-lite      |
 | google    | low    | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      |
